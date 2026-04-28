@@ -7,17 +7,29 @@ import time
 import logging
 import os
 
-from vo import VisualOdometry
+# For production
+import sys
+import platform
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='frontend', static_url_path='')
 CORS(app)
+
+# For production on Linux servers (like Render, AWS, GCP)
+# OpenCV needs special configuration on headless servers
+if platform.system() == 'Linux':
+    import cv2
+    # Use headless OpenCV
+    os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
+
+from vo import VisualOdometry
 
 vo = VisualOdometry()
 
-FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'frontend')
+# Get port from environment variable for cloud deployment
+PORT = int(os.environ.get('PORT', 5000))
 
 def decode_image(base64_str):
     try:
@@ -38,11 +50,15 @@ def decode_image(base64_str):
 
 @app.route('/')
 def index():
-    return send_from_directory(FRONTEND_DIR, 'index.html')
+    return send_from_directory('frontend', 'index.html')
 
 @app.route('/<path:filename>')
 def serve_static(filename):
-    return send_from_directory(FRONTEND_DIR, filename)
+    return send_from_directory('frontend', filename)
+
+@app.route('/favicon.ico')
+def favicon():
+    return '', 204
 
 @app.route("/process", methods=["POST"])
 def process():
@@ -52,13 +68,9 @@ def process():
         frame = decode_image(data["image"])
         mode = data.get('mode', 'mono')
         
-        if mode == 'stereo':
-            if 'right_image' in data and data['right_image']:
-                right_frame = decode_image(data['right_image'])
-                x, z, features = vo.process_stereo(frame, right_frame)
-            else:
-                # Fallback to mono if no right image
-                x, z, features = vo.process_monocular(frame)
+        if mode == 'stereo' and 'right_image' in data and data['right_image']:
+            right_frame = decode_image(data['right_image'])
+            x, z, features = vo.process_stereo(frame, right_frame)
         else:
             x, z, features = vo.process_monocular(frame)
         
@@ -97,10 +109,14 @@ def save_trajectory():
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("VISUAL ODOMETRY SYSTEM")
-    print("MONOCULAR - Single Camera")
-    print("STEREO - Dual Camera Required")
+    print("VISUAL ODOMETRY SYSTEM - PRODUCTION MODE")
     print("=" * 60)
-    print("Server: http://localhost:5000")
+    print(f"Server running on port {PORT}")
     print("=" * 60)
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    
+    # Use production server
+    if os.environ.get('ENV') == 'production':
+        from waitress import serve
+        serve(app, host='0.0.0.0', port=PORT)
+    else:
+        app.run(debug=False, host='0.0.0.0', port=PORT)
